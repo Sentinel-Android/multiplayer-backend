@@ -1,0 +1,5 @@
+CREATE TABLE users (
+    id UUID PRIMARY KEY,
+    google_sub TEXT NOT NULL UNIQUE,
+    score INTEGER NOT NULL DEFAULT 0
+);
