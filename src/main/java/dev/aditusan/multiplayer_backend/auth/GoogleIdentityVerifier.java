@@ -31,7 +31,7 @@ public final class GoogleIdentityVerifier {
                 .build();
     }
 
-    public String verifyAndGetSubject(String rawToken) {
+    public VerifiedIdentity verifyIdentity(String rawToken) {
         if (rawToken == null || rawToken.isBlank()) {
             throw invalidToken();
         }
@@ -56,10 +56,33 @@ public final class GoogleIdentityVerifier {
         if (subject == null || subject.isBlank()) {
             throw invalidToken();
         }
-        return subject;
+        String email = token.getPayload().getEmail();
+
+        if (email != null) {
+            email = email.strip();
+
+            if (email.isEmpty() || email.length() > 320) {
+                email = null;
+            }
+        }
+
+        boolean verified = email != null
+                && Boolean.TRUE.equals(
+                        token.getPayload().getEmailVerified());
+
+        return new VerifiedIdentity(subject, email, verified);
     }
 
     private static ResponseStatusException invalidToken() {
         return new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid Google ID token");
+    }
+
+    public record VerifiedIdentity(
+        String subject,
+        String email,
+        boolean emailVerified) {}
+
+    public String verifyAndGetSubject(String rawToken) {
+            return verifyIdentity(rawToken).subject();
     }
 }

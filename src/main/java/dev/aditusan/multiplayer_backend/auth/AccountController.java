@@ -46,16 +46,18 @@ public class AccountController {
     @PostMapping("/accounts")
     @ResponseStatus(HttpStatus.CREATED)
     public SessionResponse create(@RequestBody GoogleRequest request) {
-        String subject = google.verifyAndGetSubject(request.idToken());
+        var identity = google.verifyIdentity(request.idToken());
 
         User user = db.sql("""
-                INSERT INTO users (id, google_sub)
-                VALUES (:id, :subject)
+                INSERT INTO users (id, google_sub, email, email_verified)
+                VALUES (:id, :subject, :email, :emailVerified)
                 ON CONFLICT (google_sub) DO NOTHING
-                RETURNING id, score, first_name, last_name, date_of_birth
+                RETURNING id, score, first_name, last_name, date_of_birth, gender
                 """)
                 .param("id", UUID.randomUUID())
-                .param("subject", subject)
+                .param("subject", identity.subject())
+                .param("email", identity.email())
+                .param("emailVerified", identity.emailVerified())
                 .query(AccountController::readUser)
                 .optional()
                 .orElseThrow(() -> new ResponseStatusException(
@@ -66,10 +68,19 @@ public class AccountController {
 
     @PostMapping("/auth/google")
     public SessionResponse signIn(@RequestBody GoogleRequest request) {
-        String subject = google.verifyAndGetSubject(request.idToken());
+        var identity = google.verifyIdentity(request.idToken());
 
-        User user = db.sql("SELECT id, score, first_name, last_name, date_of_birth FROM users WHERE google_sub = :subject")
-                .param("subject", subject)
+        User user = db.sql("""
+                UPDATE users
+                SET email = :email,
+                    email_verified = :emailVerified
+                WHERE google_sub = :subject
+                RETURNING id, score, first_name, last_name,
+                        date_of_birth, gender
+                """)
+                .param("subject", identity.subject())
+                .param("email", identity.email())
+                .param("emailVerified", identity.emailVerified())
                 .query(AccountController::readUser)
                 .optional()
                 .orElseThrow(() -> new ResponseStatusException(
@@ -86,33 +97,45 @@ public class AccountController {
                     HttpStatus.BAD_REQUEST, "Profile is required");
         }
 
-        String subject = google.verifyAndGetSubject(request.idToken());
+        var identity = google.verifyIdentity(request.idToken());
+        String subject = identity.subject();
+
         String firstName = requireName(request.firstName(), "First name");
         String lastName = requireName(request.lastName(), "Last name");
         LocalDate birthday = request.dateOfBirth();
 
-        if (birthday == null
-                || birthday.isBefore(LocalDate.of(1900, 1, 1))
-                || birthday.isAfter(LocalDate.now(ZoneOffset.UTC))) {
+        Gender gender = request.gender() == null
+                ? Gender.PREFER_NOT_TO_SAY
+                : request.gender();
+
+        if (birthday != null
+                && (birthday.isBefore(LocalDate.of(1900, 1, 1))
+                || birthday.isAfter(LocalDate.now(ZoneOffset.UTC)))) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST, "Invalid date of birth");
         }
 
         User user = db.sql("""
                 INSERT INTO users (
-                    id, google_sub, first_name, last_name, date_of_birth
+                    id, google_sub, first_name, last_name,
+                    date_of_birth, gender, email, email_verified
                 )
                 VALUES (
-                    :id, :subject, :firstName, :lastName, :birthday
+                    :id, :subject, :firstName, :lastName,
+                    :birthday, :gender, :email, :emailVerified
                 )
                 ON CONFLICT (google_sub) DO NOTHING
-                RETURNING id, score, first_name, last_name, date_of_birth
+                RETURNING id, score, first_name, last_name,
+                        date_of_birth, gender
                 """)
                 .param("id", UUID.randomUUID())
                 .param("subject", subject)
                 .param("firstName", firstName)
                 .param("lastName", lastName)
                 .param("birthday", birthday)
+                .param("gender", gender.name())
+                .param("email", identity.email())
+                .param("emailVerified", identity.emailVerified())
                 .query(AccountController::readUser)
                 .optional()
                 .orElseThrow(() -> new ResponseStatusException(
@@ -135,7 +158,7 @@ public class AccountController {
 
     @GetMapping("/me")
     public User me(@AuthenticationPrincipal Jwt session) {
-        return db.sql("SELECT id, score, first_name, last_name, date_of_birth FROM users WHERE id = :id")
+        return db.sql("SELECT id, score, first_name, last_name, date_of_birth, gender FROM users WHERE id = :id")
                 .param("id", UUID.fromString(session.getSubject()))
                 .query(AccountController::readUser)
                 .optional()
@@ -172,12 +195,16 @@ public class AccountController {
 
     private static User readUser(ResultSet row, int rowNumber)
             throws SQLException {
+
+        String gender = row.getString("gender");
+
         return new User(
                 row.getObject("id", UUID.class),
                 row.getInt("score"),
                 row.getString("first_name"),
                 row.getString("last_name"),
-                row.getObject("date_of_birth", LocalDate.class));
+                row.getObject("date_of_birth", LocalDate.class),
+                gender == null ? null : Gender.valueOf(gender));
     }
 
     private static ResponseStatusException noAccount() {
@@ -191,12 +218,20 @@ public class AccountController {
             int score,
             String firstName,
             String lastName,
-            LocalDate dateOfBirth) {}
+            LocalDate dateOfBirth,
+            Gender gender) {}
 
     public record ProfileRequest(
             String idToken,
             String firstName,
             String lastName,
-            LocalDate dateOfBirth) {}
+            LocalDate dateOfBirth,
+            Gender gender) {}
     public record SessionResponse(String accessToken, long expiresIn, User user) {}
+
+    public enum Gender {
+        MALE,
+        FEMALE,
+        PREFER_NOT_TO_SAY
+    }
 }
