@@ -4,6 +4,8 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.UUID;
 
 import org.springframework.http.HttpStatus;
@@ -50,7 +52,7 @@ public class AccountController {
                 INSERT INTO users (id, google_sub)
                 VALUES (:id, :subject)
                 ON CONFLICT (google_sub) DO NOTHING
-                RETURNING id, score
+                RETURNING id, score, first_name, last_name, date_of_birth
                 """)
                 .param("id", UUID.randomUUID())
                 .param("subject", subject)
@@ -66,7 +68,7 @@ public class AccountController {
     public SessionResponse signIn(@RequestBody GoogleRequest request) {
         String subject = google.verifyAndGetSubject(request.idToken());
 
-        User user = db.sql("SELECT id, score FROM users WHERE google_sub = :subject")
+        User user = db.sql("SELECT id, score, first_name, last_name, date_of_birth FROM users WHERE google_sub = :subject")
                 .param("subject", subject)
                 .query(AccountController::readUser)
                 .optional()
@@ -76,9 +78,64 @@ public class AccountController {
         return newSession(user);
     }
 
+    @PostMapping("/accounts/profile")
+    @ResponseStatus(HttpStatus.CREATED)
+    public SessionResponse createProfile(@RequestBody ProfileRequest request) {
+        if (request == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "Profile is required");
+        }
+
+        String subject = google.verifyAndGetSubject(request.idToken());
+        String firstName = requireName(request.firstName(), "First name");
+        String lastName = requireName(request.lastName(), "Last name");
+        LocalDate birthday = request.dateOfBirth();
+
+        if (birthday == null
+                || birthday.isBefore(LocalDate.of(1900, 1, 1))
+                || birthday.isAfter(LocalDate.now(ZoneOffset.UTC))) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "Invalid date of birth");
+        }
+
+        User user = db.sql("""
+                INSERT INTO users (
+                    id, google_sub, first_name, last_name, date_of_birth
+                )
+                VALUES (
+                    :id, :subject, :firstName, :lastName, :birthday
+                )
+                ON CONFLICT (google_sub) DO NOTHING
+                RETURNING id, score, first_name, last_name, date_of_birth
+                """)
+                .param("id", UUID.randomUUID())
+                .param("subject", subject)
+                .param("firstName", firstName)
+                .param("lastName", lastName)
+                .param("birthday", birthday)
+                .query(AccountController::readUser)
+                .optional()
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.CONFLICT, "Account already exists"));
+
+        return newSession(user);
+    }
+
+    private static String requireName(String value, String field) {
+        String name = value == null ? "" : value.strip();
+
+        if (name.isBlank() || name.codePointCount(0, name.length()) > 100) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    field + " must contain 1–100 characters");
+        }
+
+        return name;
+    }
+
     @GetMapping("/me")
     public User me(@AuthenticationPrincipal Jwt session) {
-        return db.sql("SELECT id, score FROM users WHERE id = :id")
+        return db.sql("SELECT id, score, first_name, last_name, date_of_birth FROM users WHERE id = :id")
                 .param("id", UUID.fromString(session.getSubject()))
                 .query(AccountController::readUser)
                 .optional()
@@ -113,8 +170,14 @@ public class AccountController {
         return new SessionResponse(token, SESSION_LIFETIME.toSeconds(), user);
     }
 
-    private static User readUser(ResultSet row, int rowNumber) throws SQLException {
-        return new User(row.getObject("id", UUID.class), row.getInt("score"));
+    private static User readUser(ResultSet row, int rowNumber)
+            throws SQLException {
+        return new User(
+                row.getObject("id", UUID.class),
+                row.getInt("score"),
+                row.getString("first_name"),
+                row.getString("last_name"),
+                row.getObject("date_of_birth", LocalDate.class));
     }
 
     private static ResponseStatusException noAccount() {
@@ -123,6 +186,17 @@ public class AccountController {
     }
 
     public record GoogleRequest(String idToken) {}
-    public record User(UUID id, int score) {}
+    public record User(
+            UUID id,
+            int score,
+            String firstName,
+            String lastName,
+            LocalDate dateOfBirth) {}
+
+    public record ProfileRequest(
+            String idToken,
+            String firstName,
+            String lastName,
+            LocalDate dateOfBirth) {}
     public record SessionResponse(String accessToken, long expiresIn, User user) {}
 }

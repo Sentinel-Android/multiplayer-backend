@@ -65,7 +65,9 @@ public class SessionSecurityConfig {
                         .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                         .requestMatchers(HttpMethod.GET, "/actuator/health").permitAll()
                         .requestMatchers(HttpMethod.POST,
-                                "/api/v1/accounts", "/api/v1/auth/google").permitAll()
+                                "/api/v1/accounts",
+                                "/api/v1/accounts/profile",
+                                "/api/v1/auth/google").permitAll()
                         .requestMatchers("/api/v1/me").authenticated()
                         .anyRequest().denyAll())
                 .oauth2ResourceServer(oauth ->
