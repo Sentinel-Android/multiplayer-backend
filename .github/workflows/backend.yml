@@ -51,6 +51,7 @@ jobs:
           SPRING_DATASOURCE_USERNAME: ci_user
           SPRING_DATASOURCE_PASSWORD: ci_password
           GOOGLE_WEB_CLIENT_ID: ci-placeholder.apps.googleusercontent.com
+          APP_SESSION_SIGNING_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
         run: bash ./gradlew --no-daemon build
 
       - name: Deploy to Heroku staging
