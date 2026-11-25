@@ -2,8 +2,6 @@ package dev.aditusan.multiplayer_backend.auth;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.time.Duration;
-import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.UUID;
@@ -11,12 +9,8 @@ import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
-import org.springframework.security.oauth2.jwt.JwsHeader;
 import org.springframework.security.oauth2.jwt.Jwt;
-import org.springframework.security.oauth2.jwt.JwtClaimsSet;
-import org.springframework.security.oauth2.jwt.JwtEncoder;
-import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -30,21 +24,22 @@ import org.springframework.web.server.ResponseStatusException;
 @RequestMapping("/api/v1")
 public class AccountController {
 
-    private static final Duration SESSION_LIFETIME = Duration.ofMinutes(15);
-
     private final GoogleIdentityVerifier google;
     private final JdbcClient db;
-    private final JwtEncoder encoder;
+    private final PersistentSessionService sessions;
 
     public AccountController(
-            GoogleIdentityVerifier google, JdbcClient db, JwtEncoder encoder) {
+            GoogleIdentityVerifier google,
+            JdbcClient db,
+            PersistentSessionService sessions) {
         this.google = google;
         this.db = db;
-        this.encoder = encoder;
+        this.sessions = sessions;
     }
 
     @PostMapping("/accounts")
     @ResponseStatus(HttpStatus.CREATED)
+    @Transactional
     public SessionResponse create(@RequestBody GoogleRequest request) {
         var identity = google.verifyIdentity(request.idToken());
 
@@ -67,6 +62,7 @@ public class AccountController {
     }
 
     @PostMapping("/auth/google")
+    @Transactional
     public SessionResponse signIn(@RequestBody GoogleRequest request) {
         var identity = google.verifyIdentity(request.idToken());
 
@@ -91,6 +87,7 @@ public class AccountController {
 
     @PostMapping("/accounts/profile")
     @ResponseStatus(HttpStatus.CREATED)
+    @Transactional
     public SessionResponse createProfile(@RequestBody ProfileRequest request) {
         if (request == null) {
             throw new ResponseStatusException(
@@ -178,22 +175,10 @@ public class AccountController {
     }
 
     private SessionResponse newSession(User user) {
-        Instant now = Instant.now();
-        var claims = JwtClaimsSet.builder()
-                .issuer(SessionSecurityConfig.ISSUER)
-                .subject(user.id().toString())
-                .issuedAt(now)
-                .expiresAt(now.plus(SESSION_LIFETIME))
-                .build();
-
-        var header = JwsHeader.with(MacAlgorithm.HS256).build();
-        String token = encoder.encode(JwtEncoderParameters.from(header, claims))
-                .getTokenValue();
-
-        return new SessionResponse(token, SESSION_LIFETIME.toSeconds(), user);
+        return sessions.start(user);
     }
 
-    private static User readUser(ResultSet row, int rowNumber)
+    static User readUser(ResultSet row, int rowNumber)
             throws SQLException {
 
         String gender = row.getString("gender");
@@ -212,6 +197,26 @@ public class AccountController {
                 HttpStatus.UNAUTHORIZED, "Account no longer exists");
     }
 
+    @PostMapping("/auth/refresh")
+    public SessionResponse refresh(@RequestBody RefreshRequest request) {
+        if (request == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "Session is required");
+        }
+
+        return sessions.refresh(
+                request.refreshToken(),
+                request.requestId());
+    }
+
+    @PostMapping("/auth/logout")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void logout(@RequestBody LogoutRequest request) {
+        if (request != null) {
+            sessions.logout(request.refreshToken());
+        }
+    }
+
     public record GoogleRequest(String idToken) {}
     public record User(
             UUID id,
@@ -227,7 +232,13 @@ public class AccountController {
             String lastName,
             LocalDate dateOfBirth,
             Gender gender) {}
-    public record SessionResponse(String accessToken, long expiresIn, User user) {}
+    public record SessionResponse(String accessToken, long expiresIn, User user, String refreshToken, long refreshExpiresIn) {}
+
+    public record RefreshRequest(
+            String refreshToken,
+            UUID requestId) {}
+
+    public record LogoutRequest(String refreshToken) {}
 
     public enum Gender {
         MALE,

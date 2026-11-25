@@ -67,7 +67,9 @@ public class SessionSecurityConfig {
                         .requestMatchers(HttpMethod.POST,
                                 "/api/v1/accounts",
                                 "/api/v1/accounts/profile",
-                                "/api/v1/auth/google").permitAll()
+                                "/api/v1/auth/google",
+                                "/api/v1/auth/refresh",
+                                "/api/v1/auth/logout").permitAll()
                         .requestMatchers("/api/v1/me").authenticated()
                         .anyRequest().denyAll())
                 .oauth2ResourceServer(oauth ->

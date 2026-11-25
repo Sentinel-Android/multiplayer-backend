@@ -30,6 +30,7 @@ dependencies {
 	implementation 'com.google.api-client:google-api-client:2.9.2'
 	implementation 'com.google.http-client:google-http-client-gson:2.0.0'
 	implementation 'org.springframework.boot:spring-boot-starter-security-oauth2-resource-server'
+	testRuntimeOnly 'com.h2database:h2'
 }
 
 tasks.named('test') {
