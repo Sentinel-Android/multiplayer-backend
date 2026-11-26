@@ -71,6 +71,12 @@ public class SessionSecurityConfig {
                                 "/api/v1/auth/refresh",
                                 "/api/v1/auth/logout").permitAll()
                         .requestMatchers("/api/v1/me").authenticated()
+                        .requestMatchers(HttpMethod.GET,
+                                "/api/v1/billing/catalog",
+                                "/api/v1/billing/entitlements").authenticated()
+                        .requestMatchers(HttpMethod.POST,
+                                "/api/v1/billing/checkout",
+                                "/api/v1/billing/verify").authenticated()
                         .anyRequest().denyAll())
                 .oauth2ResourceServer(oauth ->
                         oauth.jwt(Customizer.withDefaults()))

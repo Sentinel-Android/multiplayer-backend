@@ -52,6 +52,7 @@ jobs:
           SPRING_DATASOURCE_PASSWORD: ci_password
           GOOGLE_WEB_CLIENT_ID: ci-placeholder.apps.googleusercontent.com
           APP_SESSION_SIGNING_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
+          BILLING_TEST_JDBC_URL: jdbc:postgresql://localhost:5432/multiplayer_ci
         run: bash ./gradlew --no-daemon build
 
       - name: Deploy to Heroku staging
