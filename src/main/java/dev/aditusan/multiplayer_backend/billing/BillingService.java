@@ -11,6 +11,7 @@ import java.time.ZoneOffset;
 import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -193,7 +194,20 @@ public class BillingService {
                         .query(String.class).list();
                 for (String packageName : packages) rememberVoids(packageName, play.voidedTokens(packageName));
                 lastVoidsCheck = Instant.now();
-            } catch (RuntimeException e) { LOG.warn("billing.voided_scan.retry_required"); }
+                    LOG.info("billing.voided_scan.completed");
+                } catch (RuntimeException e) {
+                    // Log fixed categories without sensitive exception details.
+                    String failure =
+                            e instanceof org.springframework.dao.DataAccessException
+                                    ? "database"
+                                    : e instanceof ResponseStatusException
+                                            ? "verification"
+                                            : "unexpected";
+
+                    LOG.warn(
+                            "billing.voided_scan.retry_required failure={}",
+                            failure);
+                }
         }
         List<Stored> rows = db.sql("""
                 SELECT * FROM billing_purchases WHERE user_id IS NOT NULL AND state <> 'REVOKED'

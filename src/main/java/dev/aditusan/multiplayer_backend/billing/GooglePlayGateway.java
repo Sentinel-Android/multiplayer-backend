@@ -8,20 +8,26 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.List;
 import java.util.ArrayList;
-import com.google.auth.oauth2.GoogleCredentials;
-import com.google.auth.oauth2.ServiceAccountCredentials;
-import com.google.gson.Gson;
-import com.google.gson.JsonParseException;
+import java.util.List;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.util.UriComponentsBuilder;
 
+import com.google.auth.oauth2.GoogleCredentials;
+import com.google.auth.oauth2.ServiceAccountCredentials;
+import com.google.gson.Gson;
+import com.google.gson.JsonParseException;
+
 @Component
 public final class GooglePlayGateway implements PlayPurchaseGateway {
+    private static final Logger LOG =
+        LoggerFactory.getLogger(GooglePlayGateway.class);
     private static final String BASE = "https://androidpublisher.googleapis.com/androidpublisher/v3";
     private static final Gson JSON = new Gson();
     private final GoogleCredentials credentials;
@@ -65,31 +71,75 @@ public final class GooglePlayGateway implements PlayPurchaseGateway {
                 }
                 page = response.tokenPagination == null ? null : response.tokenPagination.nextPageToken;
                 if (page == null || page.isBlank()) return result;
-            } catch (JsonParseException | NullPointerException e) { throw unavailable(); }
+                        } catch (JsonParseException | NullPointerException e) {
+                    LOG.warn(
+                            "billing.google_play.failure stage=voided_response failure=invalid_response");
+                    throw unavailable();
+                }
         }
         // Never silently truncate a refund scan.
         throw unavailable();
     }
-    private String send(String method, String path, Object... values) {
-        if (credentials == null) throw unavailable();
-        try {
-            credentials.refreshIfExpired();
-            URI uri = UriComponentsBuilder.fromUriString(BASE + path).encode().buildAndExpand(values).toUri();
-            var builder = HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(15))
-                    .header("Authorization", "Bearer " + credentials.getAccessToken().getTokenValue())
-                    .header("Accept", "application/json");
-            if (method.equals("POST")) builder.header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString("{}"));
-            else builder.GET();
-            var response = client.send(builder.build(), HttpResponse.BodyHandlers.ofString());
-            if (response.statusCode() == 404 || response.statusCode() == 410)
-                throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "Purchase could not be verified");
-            if (response.statusCode() < 200 || response.statusCode() >= 300) throw unavailable();
-            return response.body();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt(); throw unavailable();
-        } catch (IOException | IllegalArgumentException e) { throw unavailable(); }
-    }
+        private String send(String method, String path, Object... values) {
+            if (credentials == null) throw unavailable();
+
+            String stage = "oauth_refresh";
+            try {
+                credentials.refreshIfExpired();
+
+                stage = "request_setup";
+                URI uri = UriComponentsBuilder.fromUriString(BASE + path)
+                        .encode().buildAndExpand(values).toUri();
+
+                var builder = HttpRequest.newBuilder(uri)
+                        .timeout(Duration.ofSeconds(15))
+                        .header("Authorization",
+                                "Bearer " + credentials.getAccessToken().getTokenValue())
+                        .header("Accept", "application/json");
+
+                if (method.equals("POST")) {
+                    builder.header("Content-Type", "application/json")
+                            .POST(HttpRequest.BodyPublishers.ofString("{}"));
+                } else {
+                    builder.GET();
+                }
+
+                stage = "http_request";
+                var response = client.send(
+                        builder.build(), HttpResponse.BodyHandlers.ofString());
+
+                // Do not log URLs, response bodies or exception messages.
+                if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                    LOG.warn(
+                            "billing.google_play.failure stage=http_response http_status={}",
+                            response.statusCode());
+                }
+
+                if (response.statusCode() == 404 || response.statusCode() == 410) {
+                    throw new ResponseStatusException(
+                            HttpStatus.UNPROCESSABLE_ENTITY,
+                            "Purchase could not be verified");
+                }
+
+                if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                    throw unavailable();
+                }
+
+                return response.body();
+            } catch (InterruptedException e) {
+                LOG.warn(
+                        "billing.google_play.failure stage={} failure=interrupted",
+                        stage);
+                Thread.currentThread().interrupt();
+                throw unavailable();
+            } catch (IOException | IllegalArgumentException e) {
+                LOG.warn(
+                        "billing.google_play.failure stage={} failure={}",
+                        stage,
+                        e instanceof IOException ? "io" : "invalid_request");
+                throw unavailable();
+            }
+        }
     static Purchase parse(String body) {
         try {
             RawPurchase p = JSON.fromJson(body, RawPurchase.class);
